@@ -11,14 +11,15 @@ import array
 # relay states
 ENABLE = 0
 DISABLE = 1
-PAUSE = 2
-AUTOMOTION = 3
+AUTOMOTION = 2
+PAUSE = 4
 
 # Reading Sample Size
 SAMPLE_SIZE = 5
 
-# Array to hold distance readings
+# Array to hold distance and photocell readings to average out later
 distanceReadings = []
+photocellReadings = []
 
 class RelayState:
     # holds value for relay state.
@@ -29,20 +30,6 @@ class RelayState:
 
     def indexState(self):
         print("indexing relay state. old value: ", self.value)
-        if self.value != 3:
-            self.value += 1
-        elif self.value == 3:
-            self.value = 0
-        print("                new value: ", self.value)
-
-class MotionState:
-    # holds value for motion state.
-
-    def __init__(self, initial_state):
-        self.value = initial_state
-
-    def indexState(self):
-        print("indexing motion state. old value: ", self.value)
         if self.value != 2:
             self.value += 1
         elif self.value == 2:
@@ -70,7 +57,7 @@ class Interval:
         self.value = initial_interval
 
 
-async def monitorStateButtons(buttonStatePin, buttonSensorPin, relayState, motionState):
+async def monitorStateButtons(buttonStatePin, buttonSensorPin, relayState):
     # monitor the button to toggle state
 
     # assume button is active lower
@@ -84,7 +71,7 @@ async def monitorStateButtons(buttonStatePin, buttonSensorPin, relayState, motio
                     relayState.indexState()
                 else:
                     print("change motion state")
-                    motionState.indexState()
+                    #motionState.indexState()
 
             # let another task run
             await asyncio.sleep(0)
@@ -107,36 +94,13 @@ async def monitor_interval_buttons(pin_slower, pin_faster, interval):
             # let another task run
             await asyncio.sleep(0)
 
-async def handleMotion(triggerPin, echoPin, motionState, printDebug=False):
-
-    with adafruit_hcsr04.HCSR04(trigger_pin=triggerPin, echo_pin=echoPin) as sonar:
-        while True:
-            currentState = motionState.value
-
-            if currentState == ENABLE:
-                if printDebug:
-                    print("handleMotion. current state: ENABLE")
-                #measureDistance(sonar)
-            elif currentState == DISABLE:
-                if printDebug:
-                    print("handleMotion. current state: DISABLE")
-                relay.value = False
-            elif currentState == PAUSE:
-                if printDebug:
-                    print("handleMotion. current state: PAUSE")
-                #temporary until an async timer is implemented
-            await asyncio.sleep(0.5) # sleep for delay value for 'pause' state.
-
-
-
-
 async def handleRelay(relayPin, relayState, photocellState, printDebug=False):
     # handle relay state. disable/enable/pause
     global distanceReadings
 
-    taskRunning = False
-
     pTimer = PauseTimer(5)
+
+    autoTimer = PauseTimer(3)
 
     with digitalio.DigitalInOut(relayPin) as relay:
         relay.switch_to_output()
@@ -170,11 +134,11 @@ async def handleRelay(relayPin, relayState, photocellState, printDebug=False):
                 # if relay off, and motion detected, turn relay on and restart timer
                 pTimer.reset() #reset timer class
 
-                # add timer for setting relay states and all that.
-
                 with adafruit_hcsr04.HCSR04(trigger_pin=board.GP16, echo_pin=board.GP17) as sonar:
                         distance = measureDistance(sonar)
                         distanceReadings.append(distance)
+
+                        autoTimer.run()
 
                         # take multiple readings to average out the distance
                         if len(distanceReadings) >= SAMPLE_SIZE:
@@ -185,8 +149,9 @@ async def handleRelay(relayPin, relayState, photocellState, printDebug=False):
 
                             if avgDistance < 50:
                                 relay.value = True
+                                autoTimer.reset()
                                 # reset the motion timer here
-                            elif avgDistance >= 50:
+                            elif avgDistance >= 50 and autoTimer.getStatus() == True:
                                 relay.value = False
 
 
@@ -194,6 +159,7 @@ async def handleRelay(relayPin, relayState, photocellState, printDebug=False):
             await asyncio.sleep(0.5) # sleep for delay value for 'pause' state.
 
 async def handlePhotocell(pin, photocellState): # should be A0
+    global photocellReadings
     transitionThreshold = 30000 # arbitrary value. will have to measure actual values later
 
     with analogio.AnalogIn(pin) as pcell:
@@ -201,15 +167,27 @@ async def handlePhotocell(pin, photocellState): # should be A0
         while True:
             reading = pcell.value
             #print("photocell reading: ", reading)
+            photocellReadings.append(reading)
+
+            if len(photocellReadings) >= SAMPLE_SIZE:
+                avgReading = sum(photocellReadings)/len(photocellReadings)
+                photocellReadings = []
+
+                print("avg photocell reading: ", avgReading)
+
+                if avgReading < transitionThreshold:
+                    photocellState.value = True
+                elif avgReading > transitionThreshold and photocellState.value == True:
+                    photocellState.value = False
 
 
-            if reading < transitionThreshold:
+#            if reading < transitionThreshold:
                 # handle case where its dark out.
                 # sample reading a few times over the course of a minute or so before actually handling relay logic
-                photocellState.value = True
-            elif reading > transitionThreshold and photocellState.value == True:
-                # handle case where it switches from night to day
-                photocellState.value = False
+#                photocellState.value = True
+#            elif reading > transitionThreshold and photocellState.value == True:
+#                # handle case where it switches from night to day
+#                photocellState.value = False
 
             await asyncio.sleep(0.2)
 
@@ -228,14 +206,12 @@ async def blink(pin, interval):
 
 async def runRelay():
     relayState = RelayState(ENABLE)
-    motionState = MotionState(ENABLE)
     photocellState = PhotocellState(False)
 
 
     photocellTask = asyncio.create_task(handlePhotocell(board.A1, photocellState))
-#    motionTask = asyncio.create_task(handleMotion(board.GP16, board.GP17, motionState))
     relayTask = asyncio.create_task(handleRelay(board.GP7, relayState, photocellState)) #can enable/disable debug prints
-    relayStateTask = asyncio.create_task(monitorStateButtons(board.GP8, board.GP9, relayState, motionState))
+    relayStateTask = asyncio.create_task(monitorStateButtons(board.GP8, board.GP9, relayState))
 
     await asyncio.gather(photocellTask, relayTask, relayStateTask)
 
