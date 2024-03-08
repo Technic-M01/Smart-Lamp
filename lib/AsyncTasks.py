@@ -12,7 +12,6 @@ import array
 ENABLE = 0
 DISABLE = 1
 AUTOMOTION = 2
-PAUSE = 4
 
 # Reading Sample Size
 SAMPLE_SIZE = 5
@@ -117,29 +116,16 @@ async def handleRelay(relayPin, relayState, photocellState, printDebug=False):
                 if printDebug:
                     print("handleRelay. current state: DISABLE")
                 relay.value = False
-            elif currentState == PAUSE:
-                if printDebug:
-                    print("handleRelay. current state: PAUSE")\
-
-                pTimer.run()
-                status = pTimer.getStatus()
-                print("timer status: ", status)
-
-                if status:
-                    # turn on relay
-                    relay.value = True
-
             elif currentState == AUTOMOTION:
-                # add a timer to turn relay off after 'x' minutes
-                # if relay off, and motion detected, turn relay on and restart timer
-                pTimer.reset() #reset timer class
-
+                # abstract pin numbers to constructor
                 with adafruit_hcsr04.HCSR04(trigger_pin=board.GP16, echo_pin=board.GP17) as sonar:
                         distance = measureDistance(sonar)
                         distanceReadings.append(distance)
 
+                        # start timer that will automatically shut off relay without any movement detected
                         autoTimer.run()
 
+                        #TODO add logic from removing invalid readings (-1) from array, and then averaging from new array size
                         # take multiple readings to average out the distance
                         if len(distanceReadings) >= SAMPLE_SIZE:
                             print(distanceReadings)
@@ -147,16 +133,19 @@ async def handleRelay(relayPin, relayState, photocellState, printDebug=False):
                             print(avgDistance)
                             distanceReadings = []
 
-                            if avgDistance < 50:
-                                relay.value = True
-                                autoTimer.reset()
-                                # reset the motion timer here
+                            if avgDistance < 0 and autoTimer.getStatus() == True:
+                                relay.value = False
+
+                                print("             avg distance -1")
                             elif avgDistance >= 50 and autoTimer.getStatus() == True:
                                 relay.value = False
+                            elif avgDistance < 50:
+                                relay.value = True
+                                autoTimer.reset()
 
 
             #relay.value = not relay.value
-            await asyncio.sleep(0.5) # sleep for delay value for 'pause' state.
+            await asyncio.sleep(0.2)
 
 async def handlePhotocell(pin, photocellState): # should be A0
     global photocellReadings
@@ -166,7 +155,6 @@ async def handlePhotocell(pin, photocellState): # should be A0
 
         while True:
             reading = pcell.value
-            #print("photocell reading: ", reading)
             photocellReadings.append(reading)
 
             if len(photocellReadings) >= SAMPLE_SIZE:
@@ -180,19 +168,7 @@ async def handlePhotocell(pin, photocellState): # should be A0
                 elif avgReading > transitionThreshold and photocellState.value == True:
                     photocellState.value = False
 
-
-#            if reading < transitionThreshold:
-                # handle case where its dark out.
-                # sample reading a few times over the course of a minute or so before actually handling relay logic
-#                photocellState.value = True
-#            elif reading > transitionThreshold and photocellState.value == True:
-#                # handle case where it switches from night to day
-#                photocellState.value = False
-
-            await asyncio.sleep(0.2)
-
-
-
+            await asyncio.sleep(0.5)
 
 async def blink(pin, interval):
     # blink the given pin forever. blink rate is supplied by interval object
@@ -207,7 +183,6 @@ async def blink(pin, interval):
 async def runRelay():
     relayState = RelayState(ENABLE)
     photocellState = PhotocellState(False)
-
 
     photocellTask = asyncio.create_task(handlePhotocell(board.A1, photocellState))
     relayTask = asyncio.create_task(handleRelay(board.GP7, relayState, photocellState)) #can enable/disable debug prints
