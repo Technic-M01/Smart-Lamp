@@ -8,6 +8,11 @@ import analogio
 from Timer import PauseTimer
 import array
 
+#from DisplayControl import MyDisplay
+
+#display = MyDisplay(board.GP2, board.GP1, 0x3C)
+display = None
+
 # relay states
 ENABLE = 0
 DISABLE = 1
@@ -19,6 +24,10 @@ SAMPLE_SIZE = 5
 # Array to hold distance and photocell readings to average out later
 distanceReadings = []
 photocellReadings = []
+
+def setDisplay(myDisplay):
+    global display
+    display = myDisplay
 
 class RelayState:
     # holds value for relay state.
@@ -106,6 +115,8 @@ async def handleRelay(relayPin, relayState, photocellState, printDebug=False):
         while True:
             currentState = relayState.value
 
+            display.setRelay(currentState)
+
             if currentState == ENABLE:
                 if printDebug:
                     print("handleRelay. current state: ENABLE")
@@ -132,6 +143,9 @@ async def handleRelay(relayPin, relayState, photocellState, printDebug=False):
                             avgDistance = sum(distanceReadings) / len(distanceReadings)
                             print(avgDistance)
                             distanceReadings = []
+
+                            # update distance for display
+                            display.setDistance(avgDistance)
 
                             if avgDistance < 0 and autoTimer.getStatus() == True:
                                 relay.value = False
@@ -163,6 +177,8 @@ async def handlePhotocell(pin, photocellState): # should be A0
 
                 print("avg photocell reading: ", avgReading)
 
+                display.setPhotocell(avgReading)
+
                 if avgReading < transitionThreshold:
                     photocellState.value = True
                 elif avgReading > transitionThreshold and photocellState.value == True:
@@ -181,14 +197,17 @@ async def blink(pin, interval):
 
 
 async def runRelay():
+    global display
     relayState = RelayState(ENABLE)
     photocellState = PhotocellState(False)
 
-    photocellTask = asyncio.create_task(handlePhotocell(board.A1, photocellState))
+    displayTask = asyncio.create_task(display.checkValues())
+
+    photocellTask = asyncio.create_task(handlePhotocell(board.A2, photocellState))
     relayTask = asyncio.create_task(handleRelay(board.GP7, relayState, photocellState)) #can enable/disable debug prints
     relayStateTask = asyncio.create_task(monitorStateButtons(board.GP8, board.GP9, relayState))
 
-    await asyncio.gather(photocellTask, relayTask, relayStateTask)
+    await asyncio.gather(displayTask, photocellTask, relayTask, relayStateTask)
 
 
 async def main():
