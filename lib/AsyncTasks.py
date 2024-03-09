@@ -8,7 +8,7 @@ import analogio
 from Timer import PauseTimer
 import array
 
-#from DisplayControl import MyDisplay
+from DisplayControl import MyDisplay
 
 #display = MyDisplay(board.GP2, board.GP1, 0x3C)
 display = None
@@ -28,6 +28,7 @@ photocellReadings = []
 def setDisplay(myDisplay):
     global display
     display = myDisplay
+    # display = MyDisplay(myDisplay)
 
 class RelayState:
     # holds value for relay state.
